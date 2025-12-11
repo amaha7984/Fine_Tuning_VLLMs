@@ -1,3 +1,4 @@
+# train.py
 import argparse
 from pathlib import Path
 import os
@@ -6,12 +7,15 @@ import torch
 from torch.utils.data import DataLoader
 
 from datasets.explanation_only import ExplanationOnlyVLDataset
-from vllms.transformer_backend import load_hf_qwen_vl
+from vllms.transformer_backend import (
+    load_qwen2_5_vl,
+    load_qwen3_vl,
+)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Fine-tune Qwen2.5-VL on SynthScars explanation-only dataset"
+        description="Fine-tune VLMs/MLLMs on SynthScars explanation-only dataset"
     )
     parser.add_argument(
         "--data_root",
@@ -19,11 +23,25 @@ def parse_args():
         default="/aul/homes/amaha038/DeepLearning/VLLMs/Fine_Tuning_VLLMs/detector_vllms/data/SynthScars/SynthScars/train",
         help="Path to SynthScars train folder (contains images/ and annotations/).",
     )
+
+    # NEW: choose which family of model to use
+    parser.add_argument(
+        "--model_family",
+        type=str,
+        choices=["qwen2_5_vl", "qwen3_vl"],
+        default="qwen2_5_vl",
+        help="Which Qwen VLM family to use.",
+    )
+
     parser.add_argument(
         "--model_name",
         type=str,
         default="Qwen/Qwen2.5-VL-3B-Instruct",
-        help="Hugging Face Qwen2.5-VL model name or local path.",
+        help=(
+            "Hugging Face model name or local path. "
+            "For qwen2_5_vl: e.g., Qwen/Qwen2.5-VL-3B-Instruct "
+            "For qwen3_vl: e.g., Qwen/Qwen3-VL-4B-Instruct"
+        ),
     )
     parser.add_argument(
         "--output_dir",
@@ -77,7 +95,7 @@ def collate_fn_vl(batch):
 
 def build_conversations(questions, answers):
     """
-    Build Qwen2.5-VL chat-format conversations.
+    Build chat-format conversations for Qwen2.5-VL and Qwen3-VL.
 
     For each sample:
       user: [image + question]
@@ -132,18 +150,30 @@ def main():
     )
 
     print(f"[VLM] Loaded dataset with {len(dataset)} samples from {args.data_root}")
+    print(f"[VLM] Using model_family={args.model_family}, model_name={args.model_name}")
 
-    # 2. Load Qwen2.5-VL model + processor
-    model, processor = load_hf_qwen_vl(
-        model_name=args.model_name,
-        dtype=args.dtype,
-        device_map="auto",
-    )
-    device = model.device
+    # 2. Load model + processor based on model_family
+    if args.model_family == "qwen2_5_vl":
+        model, processor = load_qwen2_5_vl(
+            model_name=args.model_name,
+            dtype=args.dtype,
+            device_map="auto",
+        )
+    elif args.model_family == "qwen3_vl":
+        model, processor = load_qwen3_vl(
+            model_name=args.model_name,
+            dtype=args.dtype,
+            device_map="auto",
+        )
+    else:
+        raise ValueError(f"Unknown model_family: {args.model_family}")
+
+    # For device handling: with device_map='auto', parameters are on CUDA shards.
+    # Use the first parameter's device as the "main" device for tensors.
+    device = next(model.parameters()).device
     model.train()
 
     tokenizer = processor.tokenizer
-    # Make sure pad_token_id is set (also done in backend, but harmless)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -179,8 +209,8 @@ def main():
                 images=images,
                 return_tensors="pt",
                 padding=True,
-                truncation=False,
-                # max_length=args.max_length,
+                truncation=False,   # IMPORTANT: don't truncate multimodal sequences
+                # max_length=args.max_length,  # not used here to avoid mm-token mismatch
             )
 
             # Move tensors to model device
