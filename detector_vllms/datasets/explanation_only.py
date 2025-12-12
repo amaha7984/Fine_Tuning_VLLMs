@@ -102,7 +102,7 @@ class ExplanationOnlyVLDataset(Dataset):
         item = self.items[idx]
         img_path = self.images_dir / item["img_file_name"]
         image = Image.open(img_path).convert("RGB")
-        image = image.resize((384, 384)) 
+        image = image.resize((224, 224)) #Qwen = (384, 384)
 
         question = self.question_template
         answer = item["caption"]
