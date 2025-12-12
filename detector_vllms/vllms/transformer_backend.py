@@ -3,7 +3,8 @@ import torch
 from transformers import (
     AutoProcessor,
     Qwen2_5_VLForConditionalGeneration,
-    Qwen3VLForConditionalGeneration,
+    AutoModelForImageTextToText,
+   # Qwen3VLForConditionalGeneration,
 )
 
 def _resolve_dtype_and_device(dtype: str, device_map: str | None):
@@ -61,6 +62,7 @@ def load_qwen2_5_vl(
 # -------------------------------------------------------------------------
 # Qwen3-VL loader
 # -------------------------------------------------------------------------
+"""
 def load_qwen3_vl(
     model_name: str = "Qwen/Qwen3-VL-4B-Instruct",
     dtype: str = "bfloat16",
@@ -86,6 +88,46 @@ def load_qwen3_vl(
     )
 
     model.gradient_checkpointing_enable()
+    if hasattr(model.config, "use_cache"):
+        model.config.use_cache = False
+
+    return model, processor
+"""
+
+# -------------------------------------------------------------------------
+# Mistral 3 vision-language loader 
+# -------------------------------------------------------------------------
+def load_mistral3_vl(
+    model_name: str = "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+    dtype: str = "bfloat16",
+    device_map: str | None = "auto",
+):
+    """
+    Load Mistral 3 image-text-to-text model.
+
+    Uses AutoModelForImageTextToText + AutoProcessor as in HF docs.
+    """
+
+    torch_dtype, device_map = _resolve_dtype_and_device(dtype, device_map)
+
+    processor = AutoProcessor.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+    )
+
+    if hasattr(processor, "tokenizer") and processor.tokenizer.pad_token_id is None:
+        processor.tokenizer.pad_token = processor.tokenizer.eos_token
+
+    model = AutoModelForImageTextToText.from_pretrained(
+        model_name,
+        torch_dtype=torch_dtype,
+        device_map=device_map,
+        trust_remote_code=True,
+    )
+
+    # For long context + memory friendliness
+    if hasattr(model, "gradient_checkpointing_enable"):
+        model.gradient_checkpointing_enable()
     if hasattr(model.config, "use_cache"):
         model.config.use_cache = False
 
