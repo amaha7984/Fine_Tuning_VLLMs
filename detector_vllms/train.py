@@ -9,7 +9,8 @@ from torch.utils.data import DataLoader
 from datasets.explanation_only import ExplanationOnlyVLDataset
 from vllms.transformer_backend import (
     load_qwen2_5_vl,
-    load_qwen3_vl,
+    load_mistral3_vl,
+    #load_qwen3_vl,
 )
 
 
@@ -28,7 +29,7 @@ def parse_args():
     parser.add_argument(
         "--model_family",
         type=str,
-        choices=["qwen2_5_vl", "qwen3_vl"],
+        choices=["qwen2_5_vl", "qwen3_vl", "mistral3_vl"],
         default="qwen2_5_vl",
         help="Which Qwen VLM family to use.",
     )
@@ -39,16 +40,20 @@ def parse_args():
         default="Qwen/Qwen2.5-VL-3B-Instruct",
         help=(
             "Hugging Face model name or local path. "
-            "For qwen2_5_vl: e.g., Qwen/Qwen2.5-VL-3B-Instruct "
-            "For qwen3_vl: e.g., Qwen/Qwen3-VL-4B-Instruct"
+            "For qwen2_5_vl: e.g., Qwen/Qwen2.5-VL-3B-Instruct\n"
+            "For qwen3_vl:   e.g., Qwen/Qwen3-VL-4B-Instruct\n"
+            "For mistral3_vl: e.g., mistralai/Mistral-Small-3.1-24B-Instruct-2503"
         ),
     )
+    
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./outputs/qwen2_5_vl_synthscars_expl",
+        default="./outputs",
         help="Directory to save fine-tuned model checkpoints.",
     )
+    
+    
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-5)
@@ -159,6 +164,12 @@ def main():
             dtype=args.dtype,
             device_map="auto",
         )
+    elif args.model_family == "mistral3_vl":
+        model, processor = load_mistral3_vl(
+            model_name=args.model_name,
+            dtype=args.dtype,
+            device_map="auto",
+        )
     elif args.model_family == "qwen3_vl":
         model, processor = load_qwen3_vl(
             model_name=args.model_name,
@@ -173,9 +184,13 @@ def main():
     device = next(model.parameters()).device
     model.train()
 
-    tokenizer = processor.tokenizer
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is None:
+        raise RuntimeError("Processor has no `tokenizer` attribute, please inspect HF version.")
+
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
+
 
     # 3. Optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
@@ -193,11 +208,23 @@ def main():
 
             # 3.2 Use *tokenizer*'s chat template to get text with vision tokens
             #     We keep tokenize=False so we get raw strings.
-            prompts = tokenizer.apply_chat_template(
-                conversations,
-                add_generation_prompt=False,  # we include assistant messages already
-                tokenize=False,
-            )
+            if args.model_family in ["qwen2_5_vl", "qwen3_vl"]:
+                prompts = tokenizer.apply_chat_template(
+                    conversations,
+                    add_generation_prompt=False,  # assistant content already in conv
+                    tokenize=False,
+                )
+            elif args.model_family == "mistral3_vl":
+                # Mistral 3 often DOES NOT set tokenizer.chat_template.
+                # Using processor.apply_chat_template as in HF docs.
+                prompts = processor.apply_chat_template(
+                    conversations,
+                    add_generation_prompt=False,
+                    tokenize=False,
+                )
+            else:
+                raise ValueError(f"Unknown model_family: {args.model_family}")
+
 
             # HF returns a string for single conversation, list for multiple
             if isinstance(prompts, str):
@@ -218,6 +245,16 @@ def main():
                 k: (v.to(device) if isinstance(v, torch.Tensor) else v)
                 for k, v in inputs.items()
             }
+
+            # --- FIX: ensure vision tensors match model dtype (bf16/fp16) ---
+            model_dtype = next(model.parameters()).dtype
+
+            for k in ["pixel_values", "image_sizes", "pixel_values_videos"]:
+                if k in inputs and isinstance(inputs[k], torch.Tensor):
+                    # image_sizes is usually int tensor; keep it as is
+                    if k != "image_sizes":
+                        inputs[k] = inputs[k].to(dtype=model_dtype)
+
 
             # 3.4 Labels: mask padding tokens
             input_ids = inputs["input_ids"]
