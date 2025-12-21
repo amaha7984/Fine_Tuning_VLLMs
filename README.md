@@ -8,6 +8,14 @@ Supported models:
 - Mistral VLM
 - Gemma 3 Vision
 
+## LoRA Fine-Tuning
+a) Description
+- LoRA fine-tuning adapts a pretrained model without changing its original weights.
+- The original weights remain frozen during training. Instead, LoRA learns the weight changes.
+- These changes are represented using two small trainable matrices.
+- The matrices are multiplied to form a weight update with the same size as the original weight matrix.
+- Only these low-rank matrices are trained, which reduces memory and computation cost.
+
 ## QLoRA Fine-Tuning
 a) Description:
 - QLoRA fine-tuning extends LoRA by applying quantization to the pretrained model weights.
